@@ -42,7 +42,77 @@ def ET_SubElementWId(parent, tag, uuid=None):
 
 
 def as_bool(v):
+    """Convert numeric or string values to XML boolean strings."""
+    if isinstance(v, str):
+        return v.lower() in ("true", "1", "yes", "t")
     return ["false", "true"][v]
+
+
+def is_boolean_field(name):
+    """Identify taxonomy data field names that should be handled as boolean values."""
+    # Known field names in PP that expect boolean values
+    boolean_field_names = [
+        # Original boolean fields
+        "isERinUse",           # From ExpectedReturnsAttachedModel
+        "useExpectedReturn",   # Possibly used in PP's expected returns model
+        "expectedReturnEnabled", # Possibly used in PP's expected returns model
+        "isRetired",           # Boolean field for retired items
+        "isTaxonomyRetired",   # Possibly used for retired taxonomies
+        "showHiddenCategories", # Visibility setting
+        "automaticColors",     # Color setting
+        "isUsingSameColorSchemeForDonutAndTreemap", # Visualization setting
+        "isUsingFixedColorScheme",  # Another visualization setting
+        
+        # Format with colon (as stored in database)
+        "expected-return:in-use", # Maps to isERinUse
+        "expected-return:enabled", # Maps to expectedReturnEnabled
+        "rebalancing-included",   # Another potential boolean field
+        
+        # Add more boolean field names here if discovered
+    ]
+    
+    # Add any custom boolean field names specified via command line
+    if hasattr(args, 'boolean_fields') and args.boolean_fields:
+        boolean_field_names.extend(args.boolean_fields.split(','))
+        
+    # Option to treat all boolean-like values as boolean
+    if hasattr(args, 'treat_all_boolish_as_boolean') and args.treat_all_boolish_as_boolean:
+        return True  # Consider all potential boolean fields as boolean
+    
+    # Log when we find a boolean field for debugging
+    if name in boolean_field_names and args.debug:
+        logging.debug(f"Found boolean field in taxonomy data: {name}")
+    
+    return name in boolean_field_names
+
+
+def normalize_field_name(name):
+    """
+    Converts field names from database format to PP XML format.
+    Examples:
+    - expected-return:in-use → isERinUse
+    - expected-return:value → expectedReturnValue
+    """
+    if name == "expected-return:in-use":
+        return "isERinUse"
+    elif name == "expected-return:value":
+        return "expectedReturnValue"
+    elif name == "expected-return:enabled":
+        return "expectedReturnEnabled"
+    elif name.startswith("expected-return:"):
+        # Generic handler for other expected-return: fields
+        parts = name.replace("expected-return:", "").split("-")
+        return "expectedReturn" + "".join(part.capitalize() for part in parts)
+    return name
+
+
+def string_to_boolean_value(value_str):
+    """Convert various string representations to a proper boolean value."""
+    if isinstance(value_str, str):
+        normalized = value_str.lower().strip()
+        return normalized in ("true", "1", "yes", "t", "on")
+    # For non-string values, use basic truthiness
+    return bool(value_str)
 
 
 def make_prop(pel, row, prop, row_prop=None, conv=str):
@@ -308,9 +378,28 @@ def make_taxonomy_level(etree, pel, level_r):
         if data_rows:
             data = ET.SubElement(level, "data")
             for d_r in data_rows:
-                d_e = ET.SubElement(data, "entry")
-                ET.SubElement(d_e, "string").text = d_r["name"]
-                ET.SubElement(d_e, "string").text = d_r["value"]
+                # Normalize the field name from database format to PP format
+                field_name = normalize_field_name(d_r["name"])
+                
+                # Create a new entry for this data point
+                entry = ET.SubElement(data, "entry")
+                
+                # Handle boolean fields appropriately
+                if is_boolean_field(d_r["name"]) or is_boolean_field(field_name):
+                    # For boolean fields, use standard Java Map.Entry format:
+                    # <entry>
+                    #   <string>isERinUse</string>  <!-- Changed from <name> to <string> -->
+                    #   <boolean>true</boolean>
+                    # </entry>
+                    ET.SubElement(entry, "string").text = field_name
+                    bool_value = string_to_boolean_value(d_r["value"])
+                    ET.SubElement(entry, "boolean").text = str(bool_value).lower()
+                    if args.debug:
+                        logging.debug(f"Exported boolean field {d_r['name']} as {field_name}={bool_value} (with proper Java Map format)")
+                else:
+                    # For other fields, use normal key-value structure
+                    ET.SubElement(entry, "string").text = field_name
+                    ET.SubElement(entry, "string").text = d_r["value"]
 
 def main():
     root = ET.Element("client")
@@ -410,6 +499,34 @@ def main():
             el = ET.SubElement(taxon, "dimensions")
             for taxon_dim_r in taxon_dim_rows:
                 ET.SubElement(el, "string").text = taxon_dim_r["value"]
+                
+        # Handle other taxonomy-level data entries
+        taxon_data_rows = dbhelper.select("taxonomy_data", where="taxonomy='%s' AND category IS NULL AND name!='dimension'" % taxon_r["uuid"])
+        if taxon_data_rows:
+            data = ET.SubElement(taxon, "data")
+            for d_r in taxon_data_rows:
+                # Normalize the field name from database format to PP format
+                field_name = normalize_field_name(d_r["name"])
+                
+                # Create a new entry for this data point
+                entry = ET.SubElement(data, "entry")
+                
+                # Handle boolean fields appropriately
+                if is_boolean_field(d_r["name"]) or is_boolean_field(field_name):
+                    # For boolean fields, use standard Java Map.Entry format:
+                    # <entry>
+                    #   <string>isERinUse</string>  <!-- Changed from <name> to <string> -->
+                    #   <boolean>true</boolean>
+                    # </entry>
+                    ET.SubElement(entry, "string").text = field_name
+                    bool_value = string_to_boolean_value(d_r["value"])
+                    ET.SubElement(entry, "boolean").text = str(bool_value).lower()
+                    if args.debug:
+                        logging.debug(f"Exported boolean field {d_r['name']} as {field_name}={bool_value} (taxonomy-level, with proper Java Map format)")
+                else:
+                    # For other fields, use normal key-value structure
+                    ET.SubElement(entry, "string").text = field_name
+                    ET.SubElement(entry, "string").text = d_r["value"]
         e_r = dbhelper.select("taxonomy_category", where="uuid='%s'" % taxon_r["root"])[0]
         make_taxonomy_level(etree, taxon, e_r)
 
@@ -474,8 +591,114 @@ def main():
             make_prop(centry, centry_r, "data")
 
 
+    # DEBUG: Extract and log all taxonomy-related data to find the problematic field
+    if args.debug:
+        print("\nDEBUGGING TAXONOMY DATA:")
+        for taxon_r in dbhelper.select("taxonomy"):
+            print(f"\nTAXONOMY [{taxon_r['uuid']}]: {taxon_r['name']}")
+            
+            # Get all taxonomy-level data
+            taxon_data_rows = dbhelper.select("taxonomy_data", where=f"taxonomy='{taxon_r['uuid']}' AND category IS NULL")
+            for d_r in taxon_data_rows:
+                print(f"  TAXONOMY DATA: {d_r['name']} = {d_r['value']}")
+                if d_r['name'] == 'isERinUse' or 'expectedReturn' in d_r['name']:
+                    print(f"  *** POTENTIAL BOOLEAN FIELD: {d_r['name']} = {d_r['value']}")
+            
+            # Get all categories for this taxonomy
+            cat_rows = dbhelper.select("taxonomy_category", where=f"taxonomy='{taxon_r['uuid']}'")
+            for cat_r in cat_rows:
+                print(f"  CATEGORY [{cat_r['uuid']}]: {cat_r['name']}")
+                
+                # Get all category-level data
+                cat_data_rows = dbhelper.select("taxonomy_data", where=f"category='{cat_r['uuid']}'")
+                for d_r in cat_data_rows:
+                    print(f"    CATEGORY DATA: {d_r['name']} = {d_r['value']}")
+                    if d_r['name'] == 'isERinUse' or 'expectedReturn' in d_r['name']:
+                        print(f"    *** POTENTIAL BOOLEAN FIELD: {d_r['name']} = {d_r['value']}")
+        
+        # Generate sample XML for diagnosis
+        print("\nXML STRUCTURE DIAGNOSTICS:")
+        print("Generating sample XML to diagnose the issue...")
+        
+        # Create a test XML sample for taxonomy data entries
+        test_root = ET.Element("test_root")
+        
+        # 1. Sample with our original structure (pre-changes)
+        original = ET.SubElement(test_root, "original_structure")
+        entry1 = ET.SubElement(original, "entry")
+        ET.SubElement(entry1, "string").text = "fieldName"
+        ET.SubElement(entry1, "string").text = "fieldValue"
+        
+        entry2 = ET.SubElement(original, "entry")
+        ET.SubElement(entry2, "string").text = "isERinUse"
+        ET.SubElement(entry2, "boolean").text = "true"
+        
+        # 2. Sample with our current structure
+        current = ET.SubElement(test_root, "current_structure")
+        entry3 = ET.SubElement(current, "entry")
+        ET.SubElement(entry3, "name").text = "fieldName"
+        ET.SubElement(entry3, "string").text = "fieldValue"
+        
+        entry4 = ET.SubElement(current, "entry")
+        ET.SubElement(entry4, "name").text = "isERinUse"
+        ET.SubElement(entry4, "boolean").text = "true"
+        
+        # 3. Alternative structure options to test
+        alternatives = ET.SubElement(test_root, "alternative_structures")
+        
+        # 3.1 Map-style entry with key attribute
+        entry5 = ET.SubElement(alternatives, "entry")
+        key5 = ET.SubElement(entry5, "string")
+        key5.set("key", "fieldName")
+        key5.text = "fieldValue"
+        
+        # 3.2 With field tag directly
+        entry6 = ET.SubElement(alternatives, "isERinUse")
+        entry6.text = "true"
+        
+        # Print the sample XML for diagnosis
+        ET.indent(test_root)
+        print("\nTest XML Structures:")
+        print(ET.tostring(test_root, encoding='unicode'))
+    
     ET.indent(root)
-    #ET.dump(root)
+    
+    # Generate a small diagnostic sample of the data entry XML structure
+    if args.debug and args.xml_file:
+        print(f"\nWriting XML to {args.xml_file} - checking for boolean fields...")
+        
+        # Write a diagnostic file with just the data structure
+        debug_file = args.xml_file + ".debug"
+        with open(debug_file, "w", encoding="utf-8", newline="\n") as diag_out:
+            # Find a taxonomy with data to sample
+            taxonomies = root.findall(".//taxonomy")
+            if taxonomies:
+                # Take first taxonomy for sample
+                first_taxonomy = taxonomies[0]
+                
+                # Try to find data elements
+                data_elements = first_taxonomy.findall(".//data/entry")
+                if data_elements and len(data_elements) > 0:
+                    diag_out.write("CURRENT XML STRUCTURE FOR ENTRIES:\n\n")
+                    for i, entry in enumerate(data_elements[:5]):  # First 5 entries
+                        diag_out.write(f"Entry #{i+1}:\n")
+                        diag_out.write(ET.tostring(entry, encoding='unicode', pretty_print=True))
+                        diag_out.write("\n---\n")
+                else:
+                    diag_out.write("No data entries found in taxonomy.\n")
+            else:
+                diag_out.write("No taxonomies found to generate sample.\n")
+                
+            # Add a suggested format based on XStream requirements
+            diag_out.write("\n\nSUGGESTED FORMATS TO TRY:\n")
+            diag_out.write("1. Map entry style (most likely):\n")
+            diag_out.write('<entry>\n  <string>fieldName</string>\n  <boolean>true</boolean>\n</entry>\n')
+            diag_out.write("\n2. Key attribute style:\n")
+            diag_out.write('<entry key="fieldName">\n  <boolean>true</boolean>\n</entry>\n')
+            
+        print(f"Diagnostic XML sample written to {debug_file}")
+        
+    # Always dump XML to file or stdout
     out = sys.stdout
     if args.xml_file:
         out = open(args.xml_file, "w", encoding="utf-8", newline="\n")
@@ -489,6 +712,8 @@ if __name__ == "__main__":
     argp.add_argument("--sort-events", action="store_true", help="sort events by date (then description)")
     argp.add_argument("--xpath", action="store_true", help="use legacy XPath references")
     argp.add_argument("--debug", action="store_true", help="enable debug logging")
+    argp.add_argument("--boolean-fields", help="additional comma-separated list of taxonomy data field names to treat as boolean")
+    argp.add_argument("--treat-all-boolish-as-boolean", action="store_true", help="treat all fields with boolean-like values as boolean elements")
     argp.add_argument("--version", action="version", version="%(prog)s " + __version__)
     args = argp.parse_args()
 

@@ -1,0 +1,41 @@
+{
+  "account_mappings": {
+    "Lia": {
+      "pattern": "IB Lia {currency}",
+      "description": "Lia's accounts"
+    },
+    "Marcos": {
+      "pattern": "IB Marcos {currency}",
+      "description": "Marcos's primary accounts"
+    },
+    "Mariana": {
+      "pattern": "IB Mariana {currency}",
+      "description": "Mariana's accounts"
+    },
+    "U3129083": {
+      "pattern": "IB Marcos_MS {currency}",
+      "description": "Marcos MS account (IB ID: U3129083)"
+    },
+    "U15692427": {
+      "pattern": "IB Marcos RRSP {currency}",
+      "description": "RRSP account (IB ID: U15692427)"
+    }
+  },
+  "currency_mappings": {
+    "USD": "USD",
+    "CAD": "CAD",
+    "EUR": "EUR",
+    "GBP": "GBP",
+    "JPY": "JPY",
+    "AUD": "AUD",
+    "CHF": "CHF",
+    "HKD": "HKD",
+    "CNH": "CNY",
+    "CNY": "CNY",
+    "SGD": "SGD",
+    "PLN": "PLN",
+    "TWD": "TWD",
+    "SEK": "SEK"
+  },
+  "fallback_strategy": "error"
+}

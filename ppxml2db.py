@@ -524,7 +524,11 @@ class PortfolioPerformanceXML2DB:
                         else:
                             assert False, "Unexpected crossEntry class: " + parent.get("class")
 
-                        assert self.uuid2ctr_map[uuid].startswith(what), self.uuid2ctr_map[uuid]
+                        # Handle referenceAccount case - treat it as account for validation
+                        mapped_type = self.uuid2ctr_map[uuid]
+                        if mapped_type == "referenceAccount":
+                            mapped_type = "account"  # Treat referenceAccount as account for this specific validation
+                        assert mapped_type.startswith(what), f"Expected {what}, got {self.uuid2ctr_map[uuid]}"
                         self.handle_xact(what, uuid, el, 0)
                 elif el.tag == "transactionFrom":
                     if el.get("id"):
